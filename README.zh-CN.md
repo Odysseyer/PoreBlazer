@@ -27,38 +27,43 @@ PoreBlazer (v4.0) 的高性能多线程实现（OpenMP 加速），包含源码�
 ```bash
 git clone https://github.com/SarkisovGroup/PoreBlazer
 cd PoreBlazer
-cd src
 ```
 
-如果需要自行编译，请继续看下文。
-
-### 2.1 编译器
-`Makefile` 已提供。若需切换编译器，修改：
+### 2.1 推荐方式：CMake（标准开源流程）
 ```bash
-FORTRAN_COMPILER= gfortran
+mkdir -p build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Release -DPB_ENABLE_OPENMP=ON ..
+cmake --build . -j
 ```
 
-### 2.2 基础编译
-在 `src` 目录执行：
+可执行文件位于：
 ```bash
-make
+build/bin/poreblazer
 ```
-会生成 `poreblazer.exe`。
 
-### 2.2.1 OpenMP 构建（Makefile_gfort）
+可选安装：
 ```bash
-make -f Makefile_gfort release-serial   # 生成 poreblazer_serial.exe
-make -f Makefile_gfort release-omp      # 生成 poreblazer_omp.exe (OpenMP)
+cmake --install .
 ```
+
+常用 CMake 选项：
+- `PB_ENABLE_OPENMP=ON|OFF`（默认 `ON`）
+- `PB_ENABLE_NATIVE_OPT=ON|OFF`（默认 `OFF`，仅 GNU Fortran）
+- `CMAKE_BUILD_TYPE=Release|Debug`
 
 - 线程数由 `OMP_NUM_THREADS` 控制。
 - 程序启动时会打印是否启用 OpenMP 及可用线程信息。
 - 在与串行基线的基准对比中，自由体积与 PSD 输出保持基本不变。
 
-### 2.3 其他编译器
-代码已在 Intel Fortran 和 gfortran 上测试。其他编译器可自行尝试，模块依赖见 Makefile 尾部。
+### 2.2 兼容方式：Makefile 构建
+```bash
+cd src
+make -f Makefile_gfort release-serial   # 生成 poreblazer_serial.exe
+make -f Makefile_gfort release-omp      # 生成 poreblazer_omp.exe (OpenMP)
+```
 
-### 2.4 MPI 路线图（第二阶段）
+### 2.3 MPI 路线图（第二阶段）
 计划的 MPI 域分解方案包括：
 - 按 rank 划分晶格计算任务；
 - 各 rank 计算本地可达性/PSD 贡献；
@@ -76,9 +81,11 @@ HKUST1.xyz
 90             90             90
 ```
 
+说明：当 `defaults.dat` 使用 `UFF.atoms` 且运行目录没有该文件时，程序会自动尝试从可执行文件相关目录以及 `POREBLAZER_DATA_DIR` 查找。
+
 运行：
 ```bash
-./poreblazer.exe < input.dat
+./build/bin/poreblazer < input.dat
 ```
 
 ### 3.2 高级模式

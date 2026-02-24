@@ -223,6 +223,7 @@ subroutine initialize(filename)
     integer*4                             :: i, j, k, l                                 ! cycle indicies
     logical                               :: check                                      ! logical variable, required for input analysis
     character(256)                        :: filename1, filename2, filename3            ! data file names
+    character(256)                        :: atom_types_file
     real*8                                :: sigma_he, eps_he, sigma_n                  ! sigma (A) and epsilon (K) of helium; sigma (A) of nitrogen atom
     type(vectype)                         ::  atvec1
 
@@ -255,7 +256,8 @@ subroutine initialize(filename)
     read(3,*) sigma_n
     read(3,*) nsample
 
-    open(1, file=Trim(adjustl(filename1)), status='old')
+    call resolve_atom_types_file(Trim(adjustl(filename1)), atom_types_file)
+    open(1, file=Trim(adjustl(atom_types_file)), status='old')
 
     hicut2 = hicut*hicut
 
@@ -428,6 +430,176 @@ subroutine initialize(filename)
     return
 
 end subroutine initialize
+
+!--------------------------------------------------------------------------------------
+! Resolve atom types file path. This allows UFF.atoms to be omitted from the run folder
+! by falling back to executable-relative locations.
+!--------------------------------------------------------------------------------------
+subroutine resolve_atom_types_file(file_in, file_out)
+    implicit none
+    character(len=*), intent(in)  :: file_in
+    character(len=*), intent(out) :: file_out
+    character(256) :: candidate, exe_path, exe_dir, env_data_dir, base_name
+    character(256) :: to_lower, path_basename, path_dirname
+    integer :: env_status
+    logical :: exists
+
+    file_out = trim(adjustl(file_in))
+    inquire(file=trim(file_out), exist=exists)
+    if (exists) return
+
+    base_name = to_lower(path_basename(trim(file_out)))
+
+    call get_environment_variable("POREBLAZER_DATA_DIR", env_data_dir, status=env_status)
+    if (env_status == 0 .and. len_trim(env_data_dir) > 0) then
+        candidate = trim(adjustl(env_data_dir)) // "/" // trim(adjustl(file_out))
+        inquire(file=trim(candidate), exist=exists)
+        if (exists) then
+            file_out = trim(candidate)
+            write(*,'(2a)') " Using atom types file from POREBLAZER_DATA_DIR: ", trim(file_out)
+            return
+        end if
+
+        if (trim(base_name) == "uff.atoms") then
+            candidate = trim(adjustl(env_data_dir)) // "/UFF.atoms"
+            inquire(file=trim(candidate), exist=exists)
+            if (exists) then
+                file_out = trim(candidate)
+                write(*,'(2a)') " Using atom types file from POREBLAZER_DATA_DIR: ", trim(file_out)
+                return
+            end if
+        end if
+    end if
+
+    call get_command_argument(0, exe_path)
+    exe_dir = path_dirname(trim(exe_path))
+    if (len_trim(exe_dir) > 0) then
+        candidate = trim(exe_dir) // "/" // trim(adjustl(file_out))
+        inquire(file=trim(candidate), exist=exists)
+        if (exists) then
+            file_out = trim(candidate)
+            write(*,'(2a)') " Using atom types file from executable directory: ", trim(file_out)
+            return
+        end if
+
+        if (trim(base_name) == "uff.atoms") then
+            candidate = trim(exe_dir) // "/UFF.atoms"
+            inquire(file=trim(candidate), exist=exists)
+            if (exists) then
+                file_out = trim(candidate)
+                write(*,'(2a)') " Using atom types file from executable directory: ", trim(file_out)
+                return
+            end if
+
+            candidate = trim(exe_dir) // "/../UFF.atoms"
+            inquire(file=trim(candidate), exist=exists)
+            if (exists) then
+                file_out = trim(candidate)
+                write(*,'(2a)') " Using atom types file from parent directory: ", trim(file_out)
+                return
+            end if
+
+            candidate = trim(exe_dir) // "/../src/UFF.atoms"
+            inquire(file=trim(candidate), exist=exists)
+            if (exists) then
+                file_out = trim(candidate)
+                write(*,'(2a)') " Using atom types file from ../src: ", trim(file_out)
+                return
+            end if
+
+            candidate = trim(exe_dir) // "/../../src/UFF.atoms"
+            inquire(file=trim(candidate), exist=exists)
+            if (exists) then
+                file_out = trim(candidate)
+                write(*,'(2a)') " Using atom types file from ../../src: ", trim(file_out)
+                return
+            end if
+
+            candidate = trim(exe_dir) // "/../share/poreblazer/UFF.atoms"
+            inquire(file=trim(candidate), exist=exists)
+            if (exists) then
+                file_out = trim(candidate)
+                write(*,'(2a)') " Using atom types file from ../share/poreblazer: ", trim(file_out)
+                return
+            end if
+
+            candidate = trim(exe_dir) // "/../../share/poreblazer/UFF.atoms"
+            inquire(file=trim(candidate), exist=exists)
+            if (exists) then
+                file_out = trim(candidate)
+                write(*,'(2a)') " Using atom types file from ../../share/poreblazer: ", trim(file_out)
+                return
+            end if
+        end if
+    end if
+
+    write(*,'(2a)') " Could not locate atom types file: ", trim(adjustl(file_in))
+    write(*,*) " Checked current directory, POREBLAZER_DATA_DIR and executable-relative paths."
+    stop
+end subroutine resolve_atom_types_file
+
+!--------------------------------------------------------------------------------------
+! Return lower-case version of a string.
+!--------------------------------------------------------------------------------------
+character(256) function to_lower(string_in)
+    implicit none
+    character(len=*), intent(in) :: string_in
+    integer :: i, c
+
+    to_lower = string_in
+    do i = 1, len_trim(string_in)
+        c = iachar(to_lower(i:i))
+        if (c >= iachar('A') .and. c <= iachar('Z')) then
+            to_lower(i:i) = achar(c + 32)
+        end if
+    end do
+end function to_lower
+
+!--------------------------------------------------------------------------------------
+! Return basename component of a file path.
+!--------------------------------------------------------------------------------------
+character(256) function path_basename(path_in)
+    implicit none
+    character(len=*), intent(in) :: path_in
+    integer :: i, ilen, ipos
+
+    ilen = len_trim(path_in)
+    ipos = 0
+    do i = 1, ilen
+        if (path_in(i:i) == '/' .or. path_in(i:i) == '\') ipos = i
+    end do
+
+    if (ipos == 0) then
+        path_basename = trim(path_in)
+    else
+        path_basename = trim(path_in(ipos+1:ilen))
+    end if
+end function path_basename
+
+!--------------------------------------------------------------------------------------
+! Return directory component of a file path, "." if unavailable.
+!--------------------------------------------------------------------------------------
+character(256) function path_dirname(path_in)
+    implicit none
+    character(len=*), intent(in) :: path_in
+    integer :: i, ilen, ipos
+
+    ilen = len_trim(path_in)
+    ipos = 0
+    do i = 1, ilen
+        if (path_in(i:i) == '/' .or. path_in(i:i) == '\') ipos = i
+    end do
+
+    if (ipos <= 1) then
+        if (ipos == 1) then
+            path_dirname = path_in(1:1)
+        else
+            path_dirname = "."
+        end if
+    else
+        path_dirname = trim(path_in(1:ipos-1))
+    end if
+end function path_dirname
 
 !--------------------------------------------------------------------------------------
 ! Finalize: formally deallocate all arrays

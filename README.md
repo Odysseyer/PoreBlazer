@@ -18,45 +18,51 @@ Files containing databases of MOFs and their properties, MOFsubsetPB4.dat, MOFsu
 
 - Zip file containing a larger collection of case studies (MOFS, zeolites): **case_studies.zip**
 
-## 2. How to
-To download the distribution, clone the PoreBlazer repository:
+## 2. Build
+Clone the repository:
 ```bash
 git clone https://github.com/SarkisovGroup/PoreBlazer
 cd PoreBlazer
-cd src
 ```
 
-Executable poreblazer_gfortran.exe was compiled on Intel Xeon E5-2630 v3 @2.40Hz processor, 
-using gfortran compiler GNU Fortran (GCC) 4.8.5. The poreblazer_intel.exe was compiled using 17.0.4 version of 
-Intel Fortran compiler. These executables should be compatible with most Intel platforms. 
-
-If you wish to compile your own version go to the next step.
-
-2.1 **Compiler**. The Makefile is also provided. To change compiler from gfortran to intel, in the line
+### 2.1 Recommended: CMake out-of-source build
+This project now supports a standard CMake workflow:
 ```bash
-FORTRAN_COMPILER= gfortran
+mkdir -p build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Release -DPB_ENABLE_OPENMP=ON ..
+cmake --build . -j
 ```
-change gfortran to the intel compiler executable name on your system. 
 
-2.2 **Make**.To compile the code you can simply issue a **"make"** command, which 
-will follow the instructions in the Makefile to assemble the code into the
-**poreblazer.exe** executable file.
-
-2.2.1 **OpenMP builds (gfortran Makefile)**. The `src/Makefile_gfort` now provides:
+The executable is generated at:
 ```bash
-make -f Makefile_gfort release-serial   # builds poreblazer_serial.exe
-make -f Makefile_gfort release-omp      # builds poreblazer_omp.exe (OpenMP)
+build/bin/poreblazer
 ```
+
+Optional install:
+```bash
+cmake --install .
+```
+
+Key CMake options:
+- `PB_ENABLE_OPENMP=ON|OFF` (default `ON`)
+- `PB_ENABLE_NATIVE_OPT=ON|OFF` (default `OFF`, GNU Fortran only)
+- `CMAKE_BUILD_TYPE=Release|Debug`
+
 OpenMP thread count is controlled by `OMP_NUM_THREADS`.
 At startup, the executable prints whether OpenMP is enabled and the detected thread capacity.
 In benchmark comparisons against the serial baseline, free-volume and PSD outputs remained effectively unchanged.
 
-2.3 **Other compilers**. The code has been tested with Intel fortran compiler and 
-gfortran. Compilation and testing using other compilers is at the 
-discretion of the users. The mutual file dependency is summarized at the 
-end of the Makefile for custom compilations.
+### 2.2 Legacy Makefile build (compatible path)
+The old Makefile flow remains available in `src/`:
+```bash
+cd src
+make -f Makefile_gfort release-serial   # builds poreblazer_serial.exe
+make -f Makefile_gfort release-omp      # builds poreblazer_omp.exe (OpenMP)
+```
 
-2.4 **MPI roadmap (Phase 2)**. MPI domain decomposition is planned as a separate phase:
+### 2.3 MPI roadmap (Phase 2)
+MPI domain decomposition is planned as a separate phase:
 - split lattice work among ranks,
 - compute local accessibility/PSD contributions,
 - reduce global observables and write final outputs on rank 0.
@@ -72,9 +78,9 @@ Other: Slit
 
 with reference results and performance.
 
-2.3 **How to run**
+## 3. Run
 
-2.3.1 *Basic mode*
+### 3.1 Basic mode
 
 In basic mode the program uses default parameter setting. For this, in the 
 location of the run, you need to put files defaults.dat and UFF.atoms. 
@@ -85,6 +91,8 @@ structure (which uses the standard names for the elements, H, C,
 O etc) and dimensions of the unit cell (side lengths and yz, xz, xy angles. 
 For example, for HKUST1, it is specified in the input.dat file:
 
+Note: if `defaults.dat` uses `UFF.atoms` and this file is not in the run directory, the program now automatically searches executable-relative locations and `POREBLAZER_DATA_DIR`.
+
 ```bash
 HKUST1.xyz
 26.28791        26.28791        26.28791
@@ -94,11 +102,11 @@ HKUST1.xyz
 To run simply issue:
 
 ```bash
-./poreblazer.exe < input.dat
+./build/bin/poreblazer < input.dat
 ```
 Examples of the output are summarized in the provided case studies. 
 
-2.3.2 *Advanced mode*
+### 3.2 Advanced mode
 
 In the advanced mode, a user controls various parameters of the simulation, 
 such as the interaction parameters of Nitrogen and Helium atoms, cut-off 
@@ -125,7 +133,7 @@ UFF.atoms		Default forcefield: UFF
 ```
 
 
-2.3.3 *Understanding and interpreting the results*
+### 3.3 Understanding and interpreting the results
 
 Results are printed on the screen, and can be redirected to a text file. They are also summarized in
 summary.dat file. Here is an example from HKUST1 with an explanation on what is what:
