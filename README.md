@@ -1,4 +1,6 @@
 # PoreBlazer
+Language: **English** | [简体中文](README.zh-CN.md)
+
 PoreBlazer (v4.0) high-performance multithreaded implementation with OpenMP acceleration, source code, examples, and geometric properties of porous materials calculated for the subset of 12,000 structures from the CSD MOF.
 
 This repository provides a high-performance multithreaded realization of PoreBlazer focused on faster lattice and PSD calculations while keeping deviations from the serial baseline very small in practical benchmarks.
