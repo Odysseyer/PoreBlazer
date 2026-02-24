@@ -1,5 +1,7 @@
 # PoreBlazer
-PoreBlazer (v4.0) source code, examples, and geometric properties of porous materials calculated for the subset of 12,000 structures from the CSD MOF.
+PoreBlazer (v4.0) high-performance multithreaded implementation with OpenMP acceleration, source code, examples, and geometric properties of porous materials calculated for the subset of 12,000 structures from the CSD MOF.
+
+This repository provides a high-performance multithreaded realization of PoreBlazer focused on faster lattice and PSD calculations while keeping deviations from the serial baseline very small in practical benchmarks.
 
 ## 1. Contents
 - Folder: **src**
@@ -45,6 +47,7 @@ make -f Makefile_gfort release-omp      # builds poreblazer_omp.exe (OpenMP)
 ```
 OpenMP thread count is controlled by `OMP_NUM_THREADS`.
 At startup, the executable prints whether OpenMP is enabled and the detected thread capacity.
+In benchmark comparisons against the serial baseline, free-volume and PSD outputs remained effectively unchanged.
 
 2.3 **Other compilers**. The code has been tested with Intel fortran compiler and 
 gfortran. Compilation and testing using other compilers is at the 
@@ -193,5 +196,3 @@ the Free Software Foundation, either version 3 of the License, or at your option
 <p> 
   
 </p>
-
-
