@@ -38,10 +38,24 @@ change gfortran to the intel compiler executable name on your system.
 will follow the instructions in the Makefile to assemble the code into the
 **poreblazer.exe** executable file.
 
+2.2.1 **OpenMP builds (gfortran Makefile)**. The `src/Makefile_gfort` now provides:
+```bash
+make -f Makefile_gfort release-serial   # builds poreblazer_serial.exe
+make -f Makefile_gfort release-omp      # builds poreblazer_omp.exe (OpenMP)
+```
+OpenMP thread count is controlled by `OMP_NUM_THREADS`.
+At startup, the executable prints whether OpenMP is enabled and the detected thread capacity.
+
 2.3 **Other compilers**. The code has been tested with Intel fortran compiler and 
 gfortran. Compilation and testing using other compilers is at the 
 discretion of the users. The mutual file dependency is summarized at the 
 end of the Makefile for custom compilations.
+
+2.4 **MPI roadmap (Phase 2)**. MPI domain decomposition is planned as a separate phase:
+- split lattice work among ranks,
+- compute local accessibility/PSD contributions,
+- reduce global observables and write final outputs on rank 0.
+This is not implemented yet and requires an MPI toolchain (`mpifort`, `mpirun`).
 
 The distribution also contains the following case studies (**case_studies.zip**):
 
@@ -179,6 +193,5 @@ the Free Software Foundation, either version 3 of the License, or at your option
 <p> 
   
 </p>
-
 
 

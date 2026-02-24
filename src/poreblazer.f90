@@ -69,6 +69,9 @@ end module results
 program poreblazer
 use parameters
 use results
+#ifdef USE_OPENMP
+use omp_lib, only: omp_get_max_threads, omp_get_num_procs
+#endif
 implicit none
 interface initialize
     subroutine initialize(arg)
@@ -78,12 +81,24 @@ end interface initialize
 
 
 character(len=256) :: arg
+#ifdef USE_OPENMP
+integer :: omp_nthreads, omp_nprocs
+#endif
 
 write(*,*) "!-------------------------------------------------------!"
 write(*,*) "! Welcome to PB4.0                                      !"
 write(*,*) "! Developed by: Lev Sarkisov, 2012/20                   !"
 write(*,*) "! Cite: Sarkisov, Harrison, Molecular Simulation, 2011  !"
 write(*,*) "!-------------------------------------------------------!"
+write(*,*)
+
+#ifdef USE_OPENMP
+omp_nthreads = omp_get_max_threads()
+omp_nprocs = omp_get_num_procs()
+write(*,'(a,i0,a,i0)') "! OpenMP enabled: max threads=", omp_nthreads, ", available processors=", omp_nprocs
+#else
+write(*,*) "! OpenMP disabled: serial build"
+#endif
 write(*,*)
 
 write(*,*) "!-------------------------------------------------------!"
@@ -460,15 +475,13 @@ subroutine lattice_calculations
     use defaults, only:     rdbl
     use fundcell, only:     fundamental_cell, fundcell_snglminimage
     use vector, only:       vectype
-    use percolation, only:  percolation_calc, percolation_calc_simple
 
     implicit none
 
-    character(20)                      :: filename1, filename2, filename3
-    type(vectype)                      :: atvec1, atvec2, sepvec
-    real*8                             :: rdist, rdist2, rdist6, rdist12, rdist2_ref, rdist_surface, rdist_surface_ref
-    real*8                             :: sigma, sigma6, sigma12,  sig2_rdist2, lj_energy
-    integer*4                          :: i, j, k, l, icount, nstep,amin
+    type(vectype)                      :: atvec1, sepvec
+    real*8                             :: rdist2, rdist6, rdist12, rdist2_ref, rdist_surface, rdist_surface_ref
+    real*8                             :: sig2_rdist2, lj_energy, lj_sum
+    integer*4                          :: i, j, k, l, icount, amin
     logical                            :: overlap
 
 
@@ -477,8 +490,8 @@ subroutine lattice_calculations
     write(*,*) "!-------------------------------------------------------!"
     write(*,*)
 
-    icount = 0
-
+    !$omp parallel do collapse(3) schedule(static) &
+    !$omp private(icount, atvec1, sepvec, overlap, amin, rdist2_ref, rdist_surface_ref, i, rdist2, rdist_surface, sig2_rdist2, rdist6, rdist12, lj_energy, lj_sum)
     do l=1, ncubesz                                    ! we go cubelet by cubelet
         do k=1, ncubesy
             do j=1, ncubesx
@@ -495,6 +508,7 @@ subroutine lattice_calculations
                 amin = 1
                 rdist2_ref = huge(0.0d0)
                 rdist_surface_ref = huge(0.0d0)
+                lj_sum = 0.0d0
 
                 do i=1, natoms                                     ! for each cubelet go through the whole set of atoms of the adsorbent structure
 
@@ -522,7 +536,7 @@ subroutine lattice_calculations
                         rdist6 = sig2_rdist2*sig2_rdist2*sig2_rdist2                         ! with a helium atom placed in the center of the cubelet icount for later use in the helium volume calculation
                         rdist12 = rdist6*rdist6                           ! based in the second virial approach
                         lj_energy  = aeps_he(atype(i))*(rdist12-rdist6)
-                        lattice_lj_he(icount) = lattice_lj_he(icount) + lj_energy
+                        lj_sum = lj_sum + lj_energy
                     end if
                 end do
 
@@ -530,25 +544,43 @@ subroutine lattice_calculations
                     cycle
                 end if
 
+                lattice_lj_he(icount) = lj_sum
                 lattice_space(j,k,l) = 1                          ! otherwise we add it to the list of geometrically accessible cubelets lattice_space(j,k,l) = 1
-                ng_cubes = ng_cubes + 1
-                g_cubes(ng_cubes) = icount
 
                 lattice_rdist2(j,k,l) = rdist_surface_ref*rdist_surface_ref ! lattice_rdist2(j,k,l) stores the shortest squared distance between cubelet j, k, l and nearest atom (without overlap)
 
                 if(rdist2_ref>0.25*asigma2_he(atype(amin))) then  ! next few lines detect if the cubelet is accessible to helium atom and update the list of
                     lattice_space_he(j,k,l) = 1                   ! helium accessible cubelets lattice_space_He(j,k,l)
-                    !$omp atomic
-                    nhe_cubes = nhe_cubes + 1
-                    he_cubes(nhe_cubes) = icount
                 end if
 
                 if(rdist2_ref>asigma2_n(atype(amin))) then        ! next few lines detect if the cubelet is accessible to nitrogen atom and update the list of
                     lattice_space_n(j,k,l) = 1                    ! nitrogen accessible cubelets lattice_space_N(j,k,l)
+                end if
+
+            end do
+        end do
+    end do
+    !$omp end parallel do
+
+    ng_cubes = 0
+    nhe_cubes = 0
+    nn_cubes = 0
+    do l=1, ncubesz
+        do k=1, ncubesy
+            do j=1, ncubesx
+                icount = ((l-1) * ncubesx * ncubesy) + ((k-1) * ncubesx) + j
+                if(lattice_space(j,k,l) > 0) then
+                    ng_cubes = ng_cubes + 1
+                    g_cubes(ng_cubes) = icount
+                end if
+                if(lattice_space_he(j,k,l) > 0) then
+                    nhe_cubes = nhe_cubes + 1
+                    he_cubes(nhe_cubes) = icount
+                end if
+                if(lattice_space_n(j,k,l) > 0) then
                     nn_cubes = nn_cubes + 1
                     n_cubes(nn_cubes) = icount
                 end if
-
             end do
         end do
     end do
@@ -926,10 +958,11 @@ subroutine pore_distribution
     implicit none
     type(vectype)                         :: atvec1, atvec2, sepvec
     integer                               :: i, j, k, l, nx, ny, nz, nx1, ny1, nz1, icount, m, bin, isite, ncycles, ivis
-    real*8                                :: sigma_ref, sigma2_ref, sigma_ref2, rdist2
+    real*8                                :: sigma_ref, sigma2_ref, rdist2
     real*8                                :: deldis1, deldis2, deldis
     real*8                                :: x, y, z
-    integer,allocatable                   :: connolly_volume(:)
+    integer,allocatable                   :: connolly_volume(:), isite_list(:), bin_of_cycle(:), isite_hit(:)
+    logical,allocatable                   :: accepted(:)
 
     write(*,*) "!-------------------------------------------------------!"
     write(*,*) "! Starting pore size distribution calculations          !"
@@ -981,13 +1014,22 @@ subroutine pore_distribution
         return
     end if
 
-    sigma2_ref=0.0
+    allocate(isite_list(ncycles), bin_of_cycle(ncycles), isite_hit(ncycles), accepted(ncycles))
+    bin_of_cycle = 0
+    isite_hit = 0
+    accepted = .False.
 
-    do i = 1, ncycles
-    sigma2_ref=0.0
-
-        isite = int(rranf()*dble(ng_cubes)) + 1 ! randomly select an available cubelet
+    do i=1, ncycles
+        isite = int(rranf()*dble(ng_cubes)) + 1
         if(isite > ng_cubes) isite = ng_cubes
+        isite_list(i) = isite
+    end do
+
+    !$omp parallel do schedule(static) &
+    !$omp private(j, nx, ny, nz, nx1, ny1, nz1, isite, bin, atvec1, atvec2, sepvec, sigma2_ref, sigma_ref, rdist2)
+    do i = 1, ncycles
+        sigma2_ref = 0.0d0
+        isite = isite_list(i)
 
         nx = lattice_index(1, g_cubes(isite))
         ny = lattice_index(2, g_cubes(isite))
@@ -1017,12 +1059,8 @@ subroutine pore_distribution
             else
                 sigma2_ref = lattice_rdist2(nx1,ny1,nz1)       ! if yes, this will be the largest sphere
 
-                sigma_ref =  sqrt(sigma2_ref)
-                sigma_ref2 = 2.0*sigma_ref
-
-                ffv = ffv + 1.0                                ! part of the free volume enclosed by Connolly surface
-                ivis = ivis + 1
-                connolly_volume(ivis) = isite
+                accepted(i) = .True.
+                isite_hit(i) = isite
                 exit                                           ! within which point  atvec1 can sit
             end if
 
@@ -1031,13 +1069,28 @@ subroutine pore_distribution
         if(sigma2_ref==0.0) cycle
 
         sigma_ref = sqrt(sigma2_ref)                   ! sigma here is distance, not diameter
-        bin=int(2.0*sigma_ref/binsize)+1               ! distribution bin (2 is needed to make sigma proper diameter)
+        bin=int(2.0d0*sigma_ref/dble(binsize))+1               ! distribution bin (2 is needed to make sigma proper diameter)
 
         if (bin > ubound(psd_cumul, 1)) bin = ubound(psd_cumul, 1)
+        if (bin < 1) bin = 1
+        bin_of_cycle(i) = bin
+
+    end do
+    !$omp end parallel do
+
+    ffv = 0.0
+    ivis = 0
+    do i=1, ncycles
+        if(accepted(i)) then
+            ffv = ffv + 1.0
+            ivis = ivis + 1
+            connolly_volume(ivis) = isite_hit(i)
+        end if
+        bin = bin_of_cycle(i)
+        if(bin < 1) cycle
         do m=1, bin
             psd_cumul(m)=psd_cumul(m)+1                    ! update cumulative distribution
         end do
-
     end do
 
     ffv = ffv/real(ncycles)
@@ -1118,6 +1171,8 @@ subroutine pore_distribution
     write(*,*) "! Pore size distribution calculations complete          !"
     write(*,*) "!-------------------------------------------------------!"
     write(*,*)
+
+    deallocate(connolly_volume, isite_list, bin_of_cycle, isite_hit, accepted)
 
     return
 

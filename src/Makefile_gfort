@@ -32,6 +32,11 @@ GEN_FLAGS =  -cpp
 #GEN_FLAGS =  -static
 #define the F77 compiler flags
 F77FLAGS = 
+OPENMP_FLAGS =
+
+ifeq ($(OPENMP),1)
+OPENMP_FLAGS = -fopenmp -DUSE_OPENMP
+endif
 
 
 ### ----------- define flags for default compiler --------------------- 
@@ -110,18 +115,26 @@ endif
 # Implicit rules for handling src files
 #  ( uses static pattern rules, see info for make )
 %.o : %.f90 
-	$(FC) $(GEN_FLAGS) $(DEBUG_FLAGS) $(F90FLAGS) $(OFLAGS) $(DFLAGS) -c $<
+	$(FC) $(GEN_FLAGS) $(DEBUG_FLAGS) $(F90FLAGS) $(OFLAGS) $(OPENMP_FLAGS) $(DFLAGS) -c $<
 %.o : %.f
-	$(FC) $(GEN_FLAGS) $(DEBUG_FLAGS) $(F77FLAGS) $(OFLAGS) -c $<
+	$(FC) $(GEN_FLAGS) $(DEBUG_FLAGS) $(F77FLAGS) $(OFLAGS) $(OPENMP_FLAGS) -c $<
 
 OBJECTS = defaults.o percolation.o utils.o matrixops.o random.o vector.o \
 fundcell.o poreblazer.o matrix.o 
 
 $(CMD) : $(OBJECTS)
-	$(FC) $(DEBUG_FLAGS) $(OFLAGS) $(LINKERFLAGS) $(OBJECTS)  -o $(CMD)
+	$(FC) $(DEBUG_FLAGS) $(OFLAGS) $(OPENMP_FLAGS) $(LINKERFLAGS) $(OBJECTS)  -o $(CMD)
 
 dec : $(OBJECTS)
-	$(FC) $(DEBUG_FLAGS) $(OFLAGS) $(OBJECTS) -o $(CMD)
+	$(FC) $(DEBUG_FLAGS) $(OFLAGS) $(OPENMP_FLAGS) $(OBJECTS) -o $(CMD)
+
+release-serial:
+	$(MAKE) -f Makefile_gfort clean
+	$(MAKE) -f Makefile_gfort OPENMP=0 OFLAGS="-O2" CMD="poreblazer_serial.exe"
+
+release-omp:
+	$(MAKE) -f Makefile_gfort clean
+	$(MAKE) -f Makefile_gfort OPENMP=1 OFLAGS="-O3 -march=native" CMD="poreblazer_omp.exe"
 
 clean:
 	/bin/rm -f *.o *.i *.mod a.out make.log
