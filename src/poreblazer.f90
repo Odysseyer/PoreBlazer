@@ -656,16 +656,47 @@ subroutine lattice_calculations
     integer*4                          :: i, j, k, l, icount, amin
     logical                            :: overlap
 
+    ! Precomputed atom parameter caches for better cache locality
+    real*8, allocatable                :: atom_sigma2(:), atom_sigma(:), atom_sigma2_he(:), atom_eps_he(:)
+    real*8, allocatable                :: atom_sigma2_n(:)
+
+    ! Variables for inline orthogonal distance calculation
+    real*8                             :: XL, YL, ZL, d1, d2, d3
+    logical                            :: use_ortho_dist
+
+    ! Check if we can use optimized orthogonal distance calculation
+    use_ortho_dist = fcell%orthoflag
+    if (use_ortho_dist) then
+        XL = fcell%ell(1)
+        YL = fcell%ell(2)
+        ZL = fcell%ell(3)
+    end if
+
+    ! Precompute atom parameters to reduce indirect addressing
+    allocate(atom_sigma2(natoms), atom_sigma(natoms), atom_sigma2_he(natoms), &
+             atom_eps_he(natoms), atom_sigma2_n(natoms))
+    !$omp parallel do simd schedule(static)
+    do i = 1, natoms
+        atom_sigma2(i) = asigma2(atype(i))
+        atom_sigma(i) = asigma(atype(i))
+        atom_sigma2_he(i) = asigma2_he(atype(i))
+        atom_eps_he(i) = aeps_he(atype(i))
+        atom_sigma2_n(i) = asigma2_n(atype(i))
+    end do
+    !$omp end parallel do simd
 
     write(*,*) "!-------------------------------------------------------!"
     write(*,*) "! Starting preliminary lattice calculations             !"
     write(*,*) "!-------------------------------------------------------!"
     write(*,'(a,i0,a,i0,a,i0,a)') ' Grid size: ', ncubesx, ' x ', ncubesy, ' x ', ncubesz, ' cubelets'
     write(*,'(a,i0,a,i0,a)') ' Total iterations: ', ncubesx*ncubesy*ncubesz, ' x ', natoms, ' atoms'
+    if (use_ortho_dist) then
+        write(*,'(a)') ' Using optimized orthogonal distance calculation'
+    end if
     write(*,*)
 
-    !$omp parallel do collapse(3) schedule(static) &
-    !$omp private(icount, atvec1, sepvec, overlap, amin, rdist2_ref, rdist_surface_ref, i, rdist2, rdist_surface, sig2_rdist2, rdist6, rdist12, lj_energy, lj_sum)
+    !$omp parallel do collapse(3) schedule(guided) &
+    !$omp private(icount, atvec1, sepvec, overlap, amin, rdist2_ref, rdist_surface_ref, i, rdist2, rdist_surface, sig2_rdist2, rdist6, rdist12, lj_energy, lj_sum, d1, d2, d3)
     do l=1, ncubesz                                    ! we go cubelet by cubelet
         do k=1, ncubesy
             do j=1, ncubesx
@@ -686,10 +717,21 @@ subroutine lattice_calculations
 
                 do i=1, natoms                                     ! for each cubelet go through the whole set of atoms of the adsorbent structure
 
-                    call fundcell_snglMinImage(fcell,atvec1,matvec(i),sepvec,rdist2)     ! calculate the distance between each atom and center of cubelet icount
+                    ! Inline distance calculation for orthogonal boxes (major optimization)
+                    if (use_ortho_dist) then
+                        d1 = atvec1%comp(1) - matvec(i)%comp(1)
+                        d2 = atvec1%comp(2) - matvec(i)%comp(2)
+                        d3 = atvec1%comp(3) - matvec(i)%comp(3)
+                        d1 = d1 - XL * anint(d1 / XL)
+                        d2 = d2 - YL * anint(d2 / YL)
+                        d3 = d3 - ZL * anint(d3 / ZL)
+                        rdist2 = d1*d1 + d2*d2 + d3*d3
+                    else
+                        call fundcell_snglMinImage(fcell,atvec1,matvec(i),sepvec,rdist2)     ! calculate the distance between each atom and center of cubelet icount
+                    end if
 
                     ! First check if the point is "inside" a sphere
-                    if(rdist2<0.25*asigma2(atype(i))) then             ! ignore the cubelet icount if it is "inside" an atom
+                    if(rdist2<0.25*atom_sigma2(i)) then             ! ignore the cubelet icount if it is "inside" an atom
                         overlap=.True.
                         exit
                     end if
@@ -699,17 +741,17 @@ subroutine lattice_calculations
                         amin = i
                     end if
 
-                    rdist_surface = sqrt(rdist2)- 0.5*asigma(atype(i))
+                    rdist_surface = sqrt(rdist2)- 0.5*atom_sigma(i)
 
                     if(rdist_surface<rdist_surface_ref) then
                         rdist_surface_ref = rdist_surface
                     end if
 
                     if(rdist2<hicut2) then                            ! ignore the atom i if it is beyond the cutoff radius
-                        sig2_rdist2 = asigma2_he(atype(i))/rdist2         ! if an atom is within the cut-off, this is a convinient place to calculate its Lennard-Jones interaction
+                        sig2_rdist2 = atom_sigma2_he(i)/rdist2         ! if an atom is within the cut-off, this is a convinient place to calculate its Lennard-Jones interaction
                         rdist6 = sig2_rdist2*sig2_rdist2*sig2_rdist2                         ! with a helium atom placed in the center of the cubelet icount for later use in the helium volume calculation
                         rdist12 = rdist6*rdist6                           ! based in the second virial approach
-                        lj_energy  = aeps_he(atype(i))*(rdist12-rdist6)
+                        lj_energy  = atom_eps_he(i)*(rdist12-rdist6)
                         lj_sum = lj_sum + lj_energy
                     end if
                 end do
@@ -723,11 +765,11 @@ subroutine lattice_calculations
 
                 lattice_rdist2(j,k,l) = rdist_surface_ref*rdist_surface_ref ! lattice_rdist2(j,k,l) stores the shortest squared distance between cubelet j, k, l and nearest atom (without overlap)
 
-                if(rdist2_ref>0.25*asigma2_he(atype(amin))) then  ! next few lines detect if the cubelet is accessible to helium atom and update the list of
+                if(rdist2_ref>0.25*atom_sigma2_he(amin)) then  ! next few lines detect if the cubelet is accessible to helium atom and update the list of
                     lattice_space_he(j,k,l) = 1                   ! helium accessible cubelets lattice_space_He(j,k,l)
                 end if
 
-                if(rdist2_ref>asigma2_n(atype(amin))) then        ! next few lines detect if the cubelet is accessible to nitrogen atom and update the list of
+                if(rdist2_ref>atom_sigma2_n(amin)) then        ! next few lines detect if the cubelet is accessible to nitrogen atom and update the list of
                     lattice_space_n(j,k,l) = 1                    ! nitrogen accessible cubelets lattice_space_N(j,k,l)
                 end if
 
@@ -761,6 +803,9 @@ subroutine lattice_calculations
 
     allocate(PA1(ng_cubes), PA2(ng_cubes), PA3(ng_cubes), PA4(ng_cubes))
     PA1=0.0; PA2=0; PA3=0; PA4=0
+
+    ! Free precomputed atom parameter caches
+    deallocate(atom_sigma2, atom_sigma, atom_sigma2_he, atom_eps_he, atom_sigma2_n)
 
     write(*,*) "!-------------------------------------------------------!"
     write(*,*) "! Preliminary lattice complete                          !"
@@ -998,6 +1043,8 @@ subroutine surface_area
 
     stotal = 0.0      ! initialize cumulative accessible surface area
 
+    !$omp parallel do schedule(dynamic) reduction(+:stotal) &
+    !$omp private(ncount, j, phi, costheta, theta, atvec1, atvec_temp, nx, ny, nz, deny, k, sepvec, rdist2, sfrac, sjreal)
     do i=1, natoms    ! number of atoms in the structure
 
         ncount = 0
@@ -1025,7 +1072,7 @@ subroutine surface_area
             ! apply PBCs to ensure that the selected point is within the simulation cell
 
             atvec_temp = atvec1
-            
+
             if(fcell%orthoflag.eqv..True.) then
             atvec1 = fundcell_maptocell(fcell,atvec1)
             else
@@ -1037,7 +1084,7 @@ subroutine surface_area
             nx = int(atvec1%comp(1)/cube_size) + 1
             ny = int(atvec1%comp(2)/cube_size) + 1
             nz = int(atvec1%comp(3)/cube_size) + 1
-            
+
             if(nx>ncubesx) nx = nx - (nx/ncubesx)*ncubesx
             if(nx<1) nx = nx + (1-(nx/ncubesx))*ncubesx
             if(ny>ncubesy) ny = ny - (ny/ncubesy)*ncubesy
@@ -1080,6 +1127,7 @@ subroutine surface_area
         stotal=stotal+sjreal
 
     end do
+    !$omp end parallel do
 
     ! converting stotal on Surface per Volume
 
