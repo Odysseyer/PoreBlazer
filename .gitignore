@@ -16,3 +16,6 @@
 /src/*.i
 /src/*.exe
 /src/a.out
+
+# cases
+/cases/

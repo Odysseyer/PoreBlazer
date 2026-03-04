@@ -660,6 +660,8 @@ subroutine lattice_calculations
     write(*,*) "!-------------------------------------------------------!"
     write(*,*) "! Starting preliminary lattice calculations             !"
     write(*,*) "!-------------------------------------------------------!"
+    write(*,'(a,i0,a,i0,a,i0,a)') ' Grid size: ', ncubesx, ' x ', ncubesy, ' x ', ncubesz, ' cubelets'
+    write(*,'(a,i0,a,i0,a)') ' Total iterations: ', ncubesx*ncubesy*ncubesz, ' x ', natoms, ' atoms'
     write(*,*)
 
     !$omp parallel do collapse(3) schedule(static) &

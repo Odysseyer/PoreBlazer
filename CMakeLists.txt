@@ -29,7 +29,7 @@ set_target_properties(poreblazer PROPERTIES
 )
 
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-  target_compile_options(poreblazer PRIVATE -cpp)
+  target_compile_options(poreblazer PRIVATE -cpp -ffree-line-length-none)
   if(PB_ENABLE_NATIVE_OPT)
     target_compile_options(poreblazer PRIVATE "$<$<CONFIG:Release>:-march=native>")
   endif()
