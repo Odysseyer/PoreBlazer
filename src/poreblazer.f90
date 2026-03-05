@@ -675,7 +675,12 @@ subroutine lattice_calculations
     ! Precompute atom parameters to reduce indirect addressing
     allocate(atom_sigma2(natoms), atom_sigma(natoms), atom_sigma2_he(natoms), &
              atom_eps_he(natoms), atom_sigma2_n(natoms))
+#ifdef USE_OPENACC
+    !$acc parallel loop present(atype, asigma2, asigma, asigma2_he, aeps_he, asigma2_n) &
+    !$acc present(atom_sigma2, atom_sigma, atom_sigma2_he, atom_eps_he, atom_sigma2_n)
+#else
     !$omp parallel do simd schedule(static)
+#endif
     do i = 1, natoms
         atom_sigma2(i) = asigma2(atype(i))
         atom_sigma(i) = asigma(atype(i))
@@ -683,7 +688,11 @@ subroutine lattice_calculations
         atom_eps_he(i) = aeps_he(atype(i))
         atom_sigma2_n(i) = asigma2_n(atype(i))
     end do
+#ifdef USE_OPENACC
+    !$acc end parallel loop
+#else
     !$omp end parallel do simd
+#endif
 
     write(*,*) "!-------------------------------------------------------!"
     write(*,*) "! Starting preliminary lattice calculations             !"
@@ -695,8 +704,22 @@ subroutine lattice_calculations
     end if
     write(*,*)
 
+#ifdef USE_OPENACC
+    ! Enter data region for OpenACC - copy in read-only data, create output arrays
+    !$acc enter data copyin(matvec, atom_sigma2, atom_sigma, atom_sigma2_he, atom_eps_he, atom_sigma2_n) &
+    !$acc copyin(lattice_index, lattice_lj_he, hicut2, XL, YL, ZL, cube_size, ncubesx, ncubesy, ncubesz, natoms) &
+    !$acc copyin(fcell)
+    !$acc enter data create(lattice_space, lattice_space_he, lattice_space_n, lattice_rdist2)
+
+    !$acc parallel loop collapse(3) present(matvec, atom_sigma2, atom_sigma, atom_sigma2_he, atom_eps_he, atom_sigma2_n) &
+    !$acc present(lattice_index, lattice_lj_he, lattice_space, lattice_space_he, lattice_space_n, lattice_rdist2) &
+    !$acc present(hicut2, XL, YL, ZL, cube_size, ncubesx, ncubesy, ncubesz, natoms, fcell) &
+    !$acc private(icount, atvec1, sepvec, overlap, amin, rdist2_ref, rdist_surface_ref, i, rdist2, rdist_surface) &
+    !$acc private(sig2_rdist2, rdist6, rdist12, lj_energy, lj_sum, d1, d2, d3)
+#else
     !$omp parallel do collapse(3) schedule(guided) &
     !$omp private(icount, atvec1, sepvec, overlap, amin, rdist2_ref, rdist_surface_ref, i, rdist2, rdist_surface, sig2_rdist2, rdist6, rdist12, lj_energy, lj_sum, d1, d2, d3)
+#endif
     do l=1, ncubesz                                    ! we go cubelet by cubelet
         do k=1, ncubesy
             do j=1, ncubesx
@@ -756,7 +779,7 @@ subroutine lattice_calculations
                     end if
                 end do
 
-                if(overlap.eqv..True.) then                          ! if in the previous cycle an overlap was detected, this whole cubelet is ignored
+                if(overlap) then                          ! if in the previous cycle an overlap was detected, this whole cubelet is ignored
                     cycle
                 end if
 
@@ -776,7 +799,14 @@ subroutine lattice_calculations
             end do
         end do
     end do
+#ifdef USE_OPENACC
+    !$acc end parallel loop
+    ! Copy results back from device and release memory
+    !$acc exit data copyout(lattice_space, lattice_space_he, lattice_space_n, lattice_rdist2, lattice_lj_he, lattice_index)
+    !$acc exit data delete(matvec, atom_sigma2, atom_sigma, atom_sigma2_he, atom_eps_he, atom_sigma2_n, fcell)
+#else
     !$omp end parallel do
+#endif
 
     ng_cubes = 0
     nhe_cubes = 0
@@ -1000,8 +1030,11 @@ subroutine surface_area
     use defaults, only:   rdbl, pi
     use fundcell, only:   fundamental_cell, fundcell_snglminimage, fundcell_getvolume, fundcell_maptocell, fundcell_slant
     use vector, only:     vectype
-    Use random, only:     rranf
+    Use random, only:     rranf, random_init
     use results
+#ifdef USE_OPENACC
+    use curand_utils, only: curand_init_states, curand_uniform, curand_free_states
+#endif
 
     implicit none
     real*8                                :: phi, costheta, theta
@@ -1042,9 +1075,36 @@ subroutine surface_area
     end if
 
     stotal = 0.0      ! initialize cumulative accessible surface area
+    write(*,*) "!-------------------------------------------------------!"
+    write(*,*) "! Starting accessible surface area calculations         !"
+    write(*,*) "!-------------------------------------------------------!"
+    write(*,*)
 
+#ifdef USE_OPENACC
+    ! OpenACC requires orthogonal cells for efficient GPU execution
+    if (.not. use_ortho_dist) then
+        write(*,*) "WARNING: OpenACC requires orthogonal cell for surface area"
+        write(*,*) "Falling back to CPU calculation"
+    else
+        ! Initialize RNG states for OpenACC
+        call curand_init_states(natoms * nsample, iseed)
+    end if
+#else
+    call random_init(iseed)
+#endif
+
+#ifdef USE_OPENACC
+    if (use_ortho_dist) then
+        !$acc parallel loop reduction(+:stotal) present(coords, atype, asigma_n, asigma2_n, matvec, lattice_space_n) &
+        !$acc private(ncount, j, phi, costheta, theta, atvec1, atvec_temp, nx, ny, nz, deny, k, sepvec, rdist2, sfrac, sjreal)
+    else
+        !$omp parallel do schedule(dynamic) reduction(+:stotal) &
+        !$omp private(ncount, j, phi, costheta, theta, atvec1, atvec_temp, nx, ny, nz, deny, k, sepvec, rdist2, sfrac, sjreal)
+    end if
+#else
     !$omp parallel do schedule(dynamic) reduction(+:stotal) &
     !$omp private(ncount, j, phi, costheta, theta, atvec1, atvec_temp, nx, ny, nz, deny, k, sepvec, rdist2, sfrac, sjreal)
+#endif
     do i=1, natoms    ! number of atoms in the structure
 
         ncount = 0
@@ -1054,10 +1114,19 @@ subroutine surface_area
             ! generate random vector of length 1
             ! first generate phi -pi pi
 
+#ifdef USE_OPENACC
+            ! When USE_OPENACC is defined and we reach this point, use_ortho_dist is already true
+            phi=pi - 2.0d0*curand_uniform((i-1)*nsample + j)
+#else
             phi=pi - rranf()*2.0*pi
+#endif
 
             ! generate theta -pi:pi
+#ifdef USE_OPENACC
+            costheta = 1 - 2.0d0*curand_uniform((i-1)*nsample + j + natoms*nsample)
+#else
             costheta = 1 - rranf() * 2.0
+#endif
             theta = acos(costheta)
             atvec1%comp(1) = sin(theta) * cos(phi)
             atvec1%comp(2) = sin(theta) * sin(phi)
@@ -1127,7 +1196,16 @@ subroutine surface_area
         stotal=stotal+sjreal
 
     end do
+#ifdef USE_OPENACC
+    if (use_ortho_dist) then
+        !$acc end parallel loop
+        call curand_free_states()
+    else
+        !$omp end parallel do
+    end if
+#else
     !$omp end parallel do
+#endif
 
     ! converting stotal on Surface per Volume
 
@@ -1175,7 +1253,9 @@ subroutine pore_distribution
     use fundcell, only: fundcell_init, fundamental_cell, fundcell_getvolume, fundcell_snglminimage, fundcell_slant, fundcell_unslant
     Use vector, only: vectype
     Use random, Only: rranf
-
+#ifdef USE_OPENACC
+    use curand_utils, only: curand_init_states, curand_uniform, curand_free_states
+#endif
 
     implicit none
     type(vectype)                         :: atvec1, atvec2, sepvec
@@ -1241,14 +1321,26 @@ subroutine pore_distribution
     isite_hit = 0
     accepted = .False.
 
+#ifdef USE_OPENACC
+    ! Initialize RNG for OpenACC (for the parallel GPU loop below)
+    call curand_init_states(ncycles, iseed)
+#endif
+
+    ! This loop runs on CPU - always use CPU RNG
     do i=1, ncycles
         isite = int(rranf()*dble(ng_cubes)) + 1
         if(isite > ng_cubes) isite = ng_cubes
         isite_list(i) = isite
     end do
 
+#ifdef USE_OPENACC
+    !$acc parallel loop present(isite_list, g_cubes, lattice_index, lattice_rdist2, PA2, PA3, PA4) &
+    !$acc present(bin_of_cycle, accepted, isite_hit, fcell, cube_size, ng_cubes, nn_cubes, binsize, psd_cumul) &
+    !$acc private(j, nx, ny, nz, nx1, ny1, nz1, isite, bin, atvec1, atvec2, sepvec, sigma2_ref, sigma_ref, rdist2)
+#else
     !$omp parallel do schedule(static) &
     !$omp private(j, nx, ny, nz, nx1, ny1, nz1, isite, bin, atvec1, atvec2, sepvec, sigma2_ref, sigma_ref, rdist2)
+#endif
     do i = 1, ncycles
         sigma2_ref = 0.0d0
         isite = isite_list(i)
@@ -1298,7 +1390,12 @@ subroutine pore_distribution
         bin_of_cycle(i) = bin
 
     end do
+#ifdef USE_OPENACC
+    !$acc end parallel loop
+    call curand_free_states()
+#else
     !$omp end parallel do
+#endif
 
     ffv = 0.0
     ivis = 0
